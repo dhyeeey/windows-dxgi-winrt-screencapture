@@ -1,7 +1,7 @@
-﻿// ScreenCaptureNew.cpp : Defines the entry point for the application.
+﻿// main.cpp : Defines the entry point for the application.
 
 /**
- * @file ScreenCaptureNew.cpp
+ * @file main.cpp
  * @brief Main entry point for the DXGI Screen Capture application.
  * * This application demonstrates high-performance screen capture on Windows using DirectX 11 and DXGI Desktop Duplication API.
  * It implements a Strategy Pattern to allow switching between different data handling modes:

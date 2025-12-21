@@ -3,7 +3,7 @@
 #
 cmake_minimum_required (VERSION 3.8)
 
-project ("ScreenCaptureNew")
+project ("WindowsDxgiScreenCapture")
 
 # 1. Define ALL Required Libraries here (Just filenames)
 set(WIN_LIBS
@@ -48,19 +48,19 @@ if (MSVC)
 endif()
 
 # Add source to this project's executable.
-add_executable (ScreenCaptureNew "ScreenCaptureNew.cpp" 
+add_executable (WindowsDxgiScreenCapture "main.cpp" 
                                   
                                  "DxgiScreenCapture.hpp" 
                                  "DxgiScreenCapture.cpp" 
                                  "ImageSaver.hpp" "ThreadSafeQueue.hpp" "CaptureStrategies.hpp")
 
-target_link_libraries(ScreenCaptureNew
+target_link_libraries(WindowsDxgiScreenCapture
   PRIVATE
     ${WIN_LIBS}
 )
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
-  set_property(TARGET ScreenCaptureNew PROPERTY CXX_STANDARD 20)
+  set_property(TARGET WindowsDxgiScreenCapture PROPERTY CXX_STANDARD 20)
 endif()
 
 # TODO: Add tests and install targets if needed.
