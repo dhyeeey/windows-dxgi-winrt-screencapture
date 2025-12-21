@@ -1,6 +1,4 @@
-﻿Here is a clean, professional `README.md` file formatted for GitHub. You can copy-paste this directly into your repository.
-
----
+﻿---
 
 # 🖥️ DXGI High-Performance Screen Capture
 
