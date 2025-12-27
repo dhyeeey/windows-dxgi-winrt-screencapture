@@ -1,11 +1,6 @@
 #pragma once
 /**
  * @file FrameCaptureAccessStrategies.hpp
- * @brief Defines the modular strategy pattern for handling captured screen frames.
- * * This file contains the abstract base class `ICaptureStrategy` and three concrete implementations:
- * 1. GpuDirectStrategy: Returns a GPU texture pointer (Zero Copy). Best for NVENC/Rendering.
- * 2. CpuAccessStrategy: Returns raw pixel data to the main thread (Memory Copy). Best for OpenCV/Analysis.
- * 3. ThreadedSaveStrategy: Saves images to disk in a background thread (Async). Best for Recording/Screenshots.
  */
 
 #include <thread>
