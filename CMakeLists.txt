@@ -1,24 +1,16 @@
-﻿# CMakeList.txt : CMake project for ScreenCaptureNew, include source and define
-# project specific logic here.
-#
-cmake_minimum_required (VERSION 3.8)
+﻿cmake_minimum_required (VERSION 3.8)
 
 project ("WindowsDxgiScreenCapture")
 
-# 1. Define ALL Required Libraries here (Just filenames)
 set(WIN_LIBS
-    # --- FFmpeg Libraries ---
-    # avformat.lib
-    # avcodec.lib
-    # swscale.lib
-    # avutil.lib
-    # swresample.lib
 
     # --- DirectX / Graphics Libraries ---
     d3d11.lib
     dxgi.lib
     d3dcompiler.lib
+    dwmapi.lib
     windowscodecs.lib
+    windowsapp.lib
 
     # --- Windows System Libraries ---
     Ws2_32.lib
@@ -33,7 +25,6 @@ set(WIN_LIBS
     OleAut32.lib
     user32.lib
 
-    # --- NEWLY ADDED: Media Foundation Libs (Required for avcodec static linking) ---
     strmiids.lib   # For IID_ICodecAPI
     mfuuid.lib     # For IID_IMFMediaEventGenerator, IID_IMFTransform
     mfplat.lib     # Often required alongside mfuuid
@@ -49,10 +40,29 @@ endif()
 
 # Add source to this project's executable.
 add_executable (WindowsDxgiScreenCapture "main.cpp" 
-                                  
-                                 "DxgiScreenCapture.hpp" 
-                                 "DxgiScreenCapture.cpp" 
-                                 "ImageSaver.hpp" "ThreadSafeQueue.hpp" "CaptureStrategies.hpp")
+                                 "dxgicapture/DxgiScreenCapture.hpp" 
+                                 "dxgicapture/DxgiScreenCapture.cpp" 
+                                 "util/ImageSaver.hpp" 
+                                 "util/ThreadSafeQueue.hpp" 
+                                 "frameaccessmethod/FrameCaptureAcessStrategies.hpp" 
+                                 "winrtcapture/WinRTScreenCapture.hpp" 
+                                 "winrtcapture/WinRTScreenCapture.cpp" 
+                                 "screencapturemethods/IScreenCapture.hpp" 
+                                 "dxgicapture/DxgiCaptureWrapper.hpp" 
+                                 "winrtcapture/WinRTCaptureWrapper.hpp" 
+                                 "screencapturemethods/ScreenCaptureFactory.hpp")
+
+# =========================================================================
+# 4. ADD INCLUDE DIRECTORIES HERE
+# =========================================================================
+target_include_directories(WindowsDxgiScreenCapture PRIVATE 
+    "${CMAKE_CURRENT_SOURCE_DIR}"              
+    "${CMAKE_CURRENT_SOURCE_DIR}/dxgicapture"   
+    "${CMAKE_CURRENT_SOURCE_DIR}/winrtcapture"  
+    "${CMAKE_CURRENT_SOURCE_DIR}/screencapturemethods"
+    "${CMAKE_CURRENT_SOURCE_DIR}/util"
+    "${CMAKE_CURRENT_SOURCE_DIR}/frameaccessmethod"
+)
 
 target_link_libraries(WindowsDxgiScreenCapture
   PRIVATE
@@ -62,5 +72,3 @@ target_link_libraries(WindowsDxgiScreenCapture
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET WindowsDxgiScreenCapture PROPERTY CXX_STANDARD 20)
 endif()
-
-# TODO: Add tests and install targets if needed.

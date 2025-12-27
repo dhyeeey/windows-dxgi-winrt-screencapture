@@ -1,6 +1,6 @@
 #pragma once
 /**
- * @file CaptureStrategies.hpp
+ * @file FrameCaptureAccessStrategies.hpp
  * @brief Defines the modular strategy pattern for handling captured screen frames.
  * * This file contains the abstract base class `ICaptureStrategy` and three concrete implementations:
  * 1. GpuDirectStrategy: Returns a GPU texture pointer (Zero Copy). Best for NVENC/Rendering.
@@ -15,19 +15,21 @@
 
 using namespace Microsoft::WRL;
 
-// =========================================================
-// 1. Unified Frame Data Structure
-// =========================================================
-
 /**
  * @enum FrameType
  * @brief Identifies the type of data contained in a FrameData structure.
  */
 enum class FrameType {
-    CpuMemory,  ///< Standard RAM (std::vector). Accessed by CPU.
-    GpuTexture, ///< VRAM (ID3D11Texture2D). Accessed by GPU.
-    Empty       ///< No data (e.g., Poison pill, logging, or skipped frame).
+    Empty,
+    SaveFrametoImage,   ///< Saves frames to Disk in jpg/png/bmp formats (CPU, Async).
+    CpuAccess,          ///< Returns raw pixels to Main thread (CPU, Sync).
+    GpuDirect           ///< Returns D3D11 Texture pointer to Main thread (GPU, Zero-Copy).
 };
+
+
+// =========================================================
+// 1. Unified Frame Data Structure
+// =========================================================
 
 /**
  * @struct FrameData
@@ -55,14 +57,14 @@ struct FrameData {
 // =========================================================
 
 /**
- * @class ICaptureStrategy
+ * @class IFrameCaptureAccessStrategy
  * @brief Abstract Interface for frame processing logic.
  * * Allows the main application to switch between different processing modes
- * (Disk Saving, CPU Analysis, GPU Forwarding) without changing the capture loop.
+ * (Disk Saving, CPU access, GPU access) without changing the capture loop.
  */
-class ICaptureStrategy {
+class IFrameCaptureAccessStrategy {
 public:
-    virtual ~ICaptureStrategy() = default;
+    virtual ~IFrameCaptureAccessStrategy() = default;
 
     /**
      * @brief Allocates resources required for the strategy (Textures, Threads, etc.)
@@ -91,7 +93,7 @@ public:
  * * * Use Case: Video Encoding (NVENC/AMF), Rendering into a game engine, or ML inference on GPU.
  * * Mechanism: Performs a GPU-to-GPU copy. No system RAM bandwidth is used.
  */
-class GpuDirectStrategy : public ICaptureStrategy {
+class GpuDirectStrategy : public IFrameCaptureAccessStrategy {
 public:
     void Initialize(ID3D11Device* device, UINT width, UINT height) override {
         device_ = device;
@@ -124,7 +126,7 @@ public:
         context->CopyResource(outputTexture.Get(), capturedTexture);
 
         FrameData data;
-        data.type = FrameType::GpuTexture;
+        data.type = FrameType::GpuDirect;
         data.d3dTexture = outputTexture; // Move ownership to caller
         data.width = width_;
         data.height = height_;
@@ -150,7 +152,7 @@ private:
  * * * Use Case: OpenCV processing, saving to custom file formats, sending via Network Sockets.
  * * Mechanism: Copies GPU Texture -> Staging Texture -> Maps Memory -> Copies to std::vector.
  */
-class CpuAccessStrategy : public ICaptureStrategy {
+class CpuAccessStrategy : public IFrameCaptureAccessStrategy {
 public:
     void Initialize(ID3D11Device* device, UINT width, UINT height) override {
         width_ = width;
@@ -178,7 +180,7 @@ public:
         D3D11_MAPPED_SUBRESOURCE map;
         if (SUCCEEDED(context->Map(stagingTexture_.Get(), 0, D3D11_MAP_READ, 0, &map))) {
             FrameData data;
-            data.type = FrameType::CpuMemory;
+            data.type = FrameType::CpuAccess;
             data.width = width_;
             data.height = height_;
             data.stride = map.RowPitch;
@@ -210,7 +212,7 @@ private:
  * * * Use Case: Creating screenshots or image sequences without blocking the capture loop.
  * * Mechanism: Main thread copies data to RAM and pushes to a Queue. Background thread pops and saves.
  */
-class ThreadedSaveStrategy : public ICaptureStrategy {
+class FrametoImageSavingMultiThreadedStrategy : public IFrameCaptureAccessStrategy {
 public:
     void Initialize(ID3D11Device* device, UINT width, UINT height) override {
         width_ = width;
@@ -229,7 +231,7 @@ public:
         device->CreateTexture2D(&desc, nullptr, &stagingTexture_);
 
         // Start background saver thread
-        saverThread_ = std::thread(&ThreadedSaveStrategy::SaverLoop, this);
+        saverThread_ = std::thread(&FrametoImageSavingMultiThreadedStrategy::SaverLoop, this);
     }
 
     std::optional<FrameData> ProcessFrame(ID3D11DeviceContext* context, ID3D11Texture2D* capturedTexture, int frameIndex) override {
@@ -241,7 +243,7 @@ public:
         D3D11_MAPPED_SUBRESOURCE map;
         if (SUCCEEDED(context->Map(stagingTexture_.Get(), 0, D3D11_MAP_READ, 0, &map))) {
             FrameData data;
-            data.type = FrameType::CpuMemory;
+            data.type = FrameType::CpuAccess;
             data.width = width_;
             data.height = height_;
             data.stride = map.RowPitch;
@@ -276,7 +278,7 @@ private:
 
             if (frame.is_poison) break;
 
-            if (frame.type == FrameType::CpuMemory) {
+            if (frame.type == FrameType::CpuAccess) {
                 saver.saveRaw(frame.pixels, frame.width, frame.height, frame.stride, frame.filename);
             }
         }
