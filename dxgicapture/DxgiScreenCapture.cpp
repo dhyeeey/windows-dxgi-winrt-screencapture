@@ -1,4 +1,22 @@
+/**
+ * @file DxgiScreenCapture.cpp
+ */
+
 #include "DxgiScreenCapture.hpp"
+
+static void Logf(const char* fmt, ...) {
+    return;
+    char buf[5048]{};
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, args);
+    va_end(args);
+
+    OutputDebugStringA(buf);
+    OutputDebugStringA("\n");
+
+    std::cerr << buf << std::endl;
+}
 
 namespace DxgiCapture {
 
@@ -210,12 +228,15 @@ namespace DxgiCapture {
     }
 
     DesktopDuplicator::~DesktopDuplicator() {
+        CoUninitialize();
         if (keyedMutex_) {
             keyedMutex_->ReleaseSync(0);
         }
     }
 
     CaptureResult DesktopDuplicator::initialize(ID3D11Device* device, HMONITOR monitor) {
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
         if (!device) return CaptureResult::Error;
 
         device_ = device;
@@ -309,36 +330,69 @@ namespace DxgiCapture {
     CaptureResult DesktopDuplicator::capture() {
         ComPtr<ID3D11Texture2D> texture;
         UINT moveCount = 0, dirtyCount = 0;
-        DXGI_OUTDUPL_FRAME_INFO frameInfo;
+        DXGI_OUTDUPL_FRAME_INFO frameInfo{};
         bool timeout = false;
 
         auto result = acquireFrame(texture, moveCount, dirtyCount, frameInfo, timeout);
+
+        Logf("[DD][capture] acquireFrame -> result=%d timeout=%d moveCount=%u dirtyCount=%u metaBytes=%u",
+            (int)result, (int)timeout, moveCount, dirtyCount, frameInfo.TotalMetadataBufferSize);
+
         if (result != CaptureResult::Success) {
+            Logf("[DD][capture] acquireFrame FAILED result=%d", (int)result);
             return result;
         }
 
         if (timeout) {
+            Logf("[DD][capture] TIMEOUT: no new desktop frame. sharedTexture_=%p hasValidFrame_=%d",
+                sharedTexture_.Get(), (int)hasValidFrame_);
             return CaptureResult::Timeout;
         }
 
-        // Get mouse pointer info
+        hasValidFrame_ = true;
+
+        Logf("[DD][capture] New frame acquired: LastMouseUpdateTime=%lld PtrVisible=%d PtrPos=(%d,%d) ShapeBytes=%u",
+            (long long)frameInfo.LastMouseUpdateTime.QuadPart,
+            (int)frameInfo.PointerPosition.Visible,
+            (int)frameInfo.PointerPosition.Position.x,
+            (int)frameInfo.PointerPosition.Position.y,
+            (unsigned)frameInfo.PointerShapeBufferSize);
+
         result = getMouseInfo(frameInfo);
+        Logf("[DD][capture] getMouseInfo -> %d | stored visible=%d pos=(%d,%d) shapeBuf=%u type=%u WxH=%ux%u pitch=%u ts=%lld",
+            (int)result,
+            (int)pointerInfo_.isVisible(),
+            (int)pointerInfo_.getPosition().x,
+            (int)pointerInfo_.getPosition().y,
+            (unsigned)pointerInfo_.getBufferSize(),
+            (unsigned)pointerInfo_.getShapeInfo().Type,
+            (unsigned)pointerInfo_.getShapeInfo().Width,
+            (unsigned)pointerInfo_.getShapeInfo().Height,
+            (unsigned)pointerInfo_.getShapeInfo().Pitch,
+            (long long)pointerInfo_.getLastTimestamp().QuadPart);
+
         if (result != CaptureResult::Success) {
+            Logf("[DD][capture] getMouseInfo FAILED, releasing frame...");
             duplication_->ReleaseFrame();
             return result;
         }
 
-        // Process frame
-        result = processFrame(texture.Get(), sharedTexture_.Get(),
-            moveCount, dirtyCount, frameInfo);
+        result = processFrame(texture.Get(), sharedTexture_.Get(), moveCount, dirtyCount, frameInfo);
+        Logf("[DD][capture] processFrame -> %d", (int)result);
 
         HRESULT hr = duplication_->ReleaseFrame();
+        Logf("[DD][capture] ReleaseFrame hr=0x%08X", (unsigned)hr);
+
         if (FAILED(hr)) {
-            return checkHResult(device_.Get(), hr, FRAME_INFO_EXPECTED_ERRORS);
+            auto cr = checkHResult(device_.Get(), hr, FRAME_INFO_EXPECTED_ERRORS);
+            Logf("[DD][capture] ReleaseFrame FAILED -> %d", (int)cr);
+            return cr;
         }
 
         return result;
     }
+
+
 
     CaptureResult DesktopDuplicator::acquireFrame(ComPtr<ID3D11Texture2D>& texture,
         UINT& moveCount,
@@ -398,7 +452,7 @@ namespace DxgiCapture {
         return CaptureResult::Success;
     }
 
-    CaptureResult DesktopDuplicator::getMouseInfo(const DXGI_OUTDUPL_FRAME_INFO& frameInfo) {
+    /*CaptureResult DesktopDuplicator::getMouseInfo(const DXGI_OUTDUPL_FRAME_INFO& frameInfo) {
         if (frameInfo.LastMouseUpdateTime.QuadPart == 0) {
             return CaptureResult::Success;
         }
@@ -424,6 +478,50 @@ namespace DxgiCapture {
         if (FAILED(hr)) {
             return checkHResult(device_.Get(), hr, FRAME_INFO_EXPECTED_ERRORS);
         }
+
+        return CaptureResult::Success;
+    }*/
+
+    CaptureResult DesktopDuplicator::getMouseInfo(const DXGI_OUTDUPL_FRAME_INFO& frameInfo) {
+        // 1. Process Shape Updates FIRST
+        // Sometimes DXGI sends a shape update with Time=0 or during a visibility transition.
+        // If we have new shape data, we must capture it.
+        if (frameInfo.PointerShapeBufferSize > 0) {
+            pointerInfo_.reallocBuffer(frameInfo.PointerShapeBufferSize);
+
+            UINT dummyBytesRead;
+            HRESULT hr = duplication_->GetFramePointerShape(
+                frameInfo.PointerShapeBufferSize,
+                pointerInfo_.getShapeBuffer(),
+                &dummyBytesRead,
+                &pointerInfo_.getShapeInfo());
+
+            if (FAILED(hr)) {
+                return checkHResult(device_.Get(), hr, FRAME_INFO_EXPECTED_ERRORS);
+            }
+
+            // HEURISTIC: If we received a massive shape payload, the OS intends for us to draw it.
+            // Force visibility to true to prevent flickering during shape transitions (e.g. Resize -> Arrow).
+            pointerInfo_.setVisible(true);
+
+            // Also update position if available, even if Time == 0
+            pointerInfo_.getPosition().x = frameInfo.PointerPosition.Position.x;
+            pointerInfo_.getPosition().y = frameInfo.PointerPosition.Position.y;
+
+            return CaptureResult::Success;
+        }
+
+        // 2. If no shape update, check for Position/Visibility updates
+        if (frameInfo.LastMouseUpdateTime.QuadPart == 0) {
+            // No update occurred. Preserve previous state.
+            return CaptureResult::Success;
+        }
+
+        // 3. Standard Update
+        pointerInfo_.getPosition().x = frameInfo.PointerPosition.Position.x;
+        pointerInfo_.getPosition().y = frameInfo.PointerPosition.Position.y;
+        pointerInfo_.getLastTimestamp() = frameInfo.LastMouseUpdateTime;
+        pointerInfo_.setVisible(frameInfo.PointerPosition.Visible != 0);
 
         return CaptureResult::Success;
     }
@@ -641,28 +739,106 @@ namespace DxgiCapture {
         return CaptureResult::Success;
     }
 
+    //bool DesktopDuplicator::processMonoMask(bool isMono,
+    //    INT& ptrWidth, INT& ptrHeight,
+    //    INT& ptrLeft, INT& ptrTop,
+    //    std::vector<BYTE>& initBuffer,
+    //    D3D11_BOX& box) {
+    //    // Current shape info
+    //    const auto& shapeInfo = pointerInfo_.getShapeInfo();
+
+    //    // Copy coordinates
+    //    ptrWidth = shapeInfo.Width;
+    //    ptrHeight = shapeInfo.Height;
+    //    ptrLeft = pointerInfo_.getPosition().x;
+    //    ptrTop = pointerInfo_.getPosition().y;
+
+    //    if (!isMono) {
+    //        // Color cursor (already 32-bit ARGB)
+    //        initBuffer.assign(pointerInfo_.getShapeBuffer(),
+    //            pointerInfo_.getShapeBuffer() + pointerInfo_.getBufferSize());
+    //    }
+    //    else {
+    //        // Monochrome cursor (1 bit AND mask, 1 bit XOR mask)
+    //        ptrHeight = shapeInfo.Height / 2; // Mono masks are double height
+    //        UINT maskPitch = shapeInfo.Pitch;
+    //        const BYTE* shapeBuffer = pointerInfo_.getShapeBuffer();
+
+    //        initBuffer.resize(ptrWidth * ptrHeight * 4);
+
+    //        const BYTE* andMask = shapeBuffer;
+    //        const BYTE* xorMask = shapeBuffer + (ptrHeight * maskPitch);
+
+    //        for (INT row = 0; row < ptrHeight; ++row) {
+    //            for (INT col = 0; col < ptrWidth; ++col) {
+    //                UINT maskBit = 0x80 >> (col & 7);
+    //                UINT maskByte = col / 8;
+
+    //                bool andBit = (andMask[row * maskPitch + maskByte] & maskBit) != 0;
+    //                bool xorBit = (xorMask[row * maskPitch + maskByte] & maskBit) != 0;
+
+    //                UINT index = (row * ptrWidth + col) * 4;
+
+    //                // Cursor Logic:
+    //                // AND 1, XOR 0 -> Transparent
+    //                // AND 0, XOR 1 -> White
+    //                // AND 0, XOR 0 -> Black
+    //                // AND 1, XOR 1 -> Invert (Treat as Black for simplicity)
+
+    //                if (andBit && !xorBit) {
+    //                    // Transparent
+    //                    initBuffer[index] = 0;
+    //                    initBuffer[index + 1] = 0;
+    //                    initBuffer[index + 2] = 0;
+    //                    initBuffer[index + 3] = 0;
+    //                }
+    //                else if (!andBit && xorBit) {
+    //                    // White
+    //                    initBuffer[index] = 0xFF;
+    //                    initBuffer[index + 1] = 0xFF;
+    //                    initBuffer[index + 2] = 0xFF;
+    //                    initBuffer[index + 3] = 0xFF;
+    //                }
+    //                else {
+    //                    // Black
+    //                    initBuffer[index] = 0;
+    //                    initBuffer[index + 1] = 0;
+    //                    initBuffer[index + 2] = 0;
+    //                    initBuffer[index + 3] = 0xFF; // Opaque
+    //                }
+    //            }
+    //        }
+    //    }
+
+    //    // Set Update Box
+    //    box.left = 0;
+    //    box.top = 0;
+    //    box.front = 0;
+    //    box.right = ptrWidth;
+    //    box.bottom = ptrHeight;
+    //    box.back = 1;
+
+    //    return true;
+    //}
+
+
     bool DesktopDuplicator::processMonoMask(bool isMono,
         INT& ptrWidth, INT& ptrHeight,
         INT& ptrLeft, INT& ptrTop,
         std::vector<BYTE>& initBuffer,
         D3D11_BOX& box) {
-        // Current shape info
+
         const auto& shapeInfo = pointerInfo_.getShapeInfo();
 
-        // Copy coordinates
+        // Copy basic coordinates
         ptrWidth = shapeInfo.Width;
         ptrHeight = shapeInfo.Height;
         ptrLeft = pointerInfo_.getPosition().x;
         ptrTop = pointerInfo_.getPosition().y;
 
-        if (!isMono) {
-            // Color cursor (already 32-bit ARGB)
-            initBuffer.assign(pointerInfo_.getShapeBuffer(),
-                pointerInfo_.getShapeBuffer() + pointerInfo_.getBufferSize());
-        }
-        else {
-            // Monochrome cursor (1 bit AND mask, 1 bit XOR mask)
-            ptrHeight = shapeInfo.Height / 2; // Mono masks are double height
+        // 1. Monochrome (AND/XOR Masks) - Standard Text/Arrow cursors
+        if (shapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME) {
+            ptrHeight = shapeInfo.Height / 2;
             UINT maskPitch = shapeInfo.Pitch;
             const BYTE* shapeBuffer = pointerInfo_.getShapeBuffer();
 
@@ -681,44 +857,66 @@ namespace DxgiCapture {
 
                     UINT index = (row * ptrWidth + col) * 4;
 
-                    // Cursor Logic:
-                    // AND 1, XOR 0 -> Transparent
-                    // AND 0, XOR 1 -> White
-                    // AND 0, XOR 0 -> Black
-                    // AND 1, XOR 1 -> Invert (Treat as Black for simplicity)
-
-                    if (andBit && !xorBit) {
-                        // Transparent
-                        initBuffer[index] = 0;
-                        initBuffer[index + 1] = 0;
-                        initBuffer[index + 2] = 0;
-                        initBuffer[index + 3] = 0;
+                    if (andBit && !xorBit) { // Transparent
+                        initBuffer[index] = 0;     initBuffer[index + 1] = 0;
+                        initBuffer[index + 2] = 0; initBuffer[index + 3] = 0;
                     }
-                    else if (!andBit && xorBit) {
-                        // White
-                        initBuffer[index] = 0xFF;
-                        initBuffer[index + 1] = 0xFF;
-                        initBuffer[index + 2] = 0xFF;
-                        initBuffer[index + 3] = 0xFF;
+                    else if (!andBit && xorBit) { // White
+                        initBuffer[index] = 0xFF; initBuffer[index + 1] = 0xFF;
+                        initBuffer[index + 2] = 0xFF; initBuffer[index + 3] = 0xFF;
                     }
-                    else {
-                        // Black
-                        initBuffer[index] = 0;
-                        initBuffer[index + 1] = 0;
-                        initBuffer[index + 2] = 0;
-                        initBuffer[index + 3] = 0xFF; // Opaque
+                    else if (andBit && xorBit) { // Invert -> Black
+                        initBuffer[index] = 0; initBuffer[index + 1] = 0;
+                        initBuffer[index + 2] = 0; initBuffer[index + 3] = 0xFF;
+                    }
+                    else { // Black
+                        initBuffer[index] = 0; initBuffer[index + 1] = 0;
+                        initBuffer[index + 2] = 0; initBuffer[index + 3] = 0xFF;
                     }
                 }
             }
         }
+        // 2. Color / Masked Color
+        else if (shapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR ||
+            shapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR) {
+
+            initBuffer.resize(ptrWidth * ptrHeight * 4);
+
+            const BYTE* src = pointerInfo_.getShapeBuffer();
+            BYTE* dst = initBuffer.data();
+
+            UINT srcPitch = shapeInfo.Pitch;
+            UINT dstPitch = ptrWidth * 4;
+
+            for (INT row = 0; row < ptrHeight; ++row) {
+                // Copy row
+                const BYTE* rowSrc = src + (row * srcPitch);
+                BYTE* rowDst = dst + (row * dstPitch);
+                memcpy(rowDst, rowSrc, dstPitch);
+
+                // SAFETY FIX: Check Alpha Channel
+                // Some "Masked" color cursors have 0 Alpha in the pixel data because they rely on a separate mask.
+                // If we blindly copy, we get an invisible cursor.
+                // We iterate pixels and force Alpha to 255 if it looks like a valid color pixel but has 0 alpha.
+                for (INT col = 0; col < ptrWidth; ++col) {
+                    UINT pixelIndex = col * 4;
+                    // If RGB is not black (0,0,0) but Alpha is 0, force Alpha 255
+                    if (rowDst[pixelIndex + 3] == 0) {
+                        if (rowDst[pixelIndex] != 0 || rowDst[pixelIndex + 1] != 0 || rowDst[pixelIndex + 2] != 0) {
+                            rowDst[pixelIndex + 3] = 0xFF;
+                        }
+                        // Optional: If it's pure black (0,0,0,0), it's likely transparent, leave it.
+                    }
+                }
+            }
+        }
+        else {
+            return false;
+        }
 
         // Set Update Box
-        box.left = 0;
-        box.top = 0;
-        box.front = 0;
-        box.right = ptrWidth;
-        box.bottom = ptrHeight;
-        box.back = 1;
+        box.left = 0; box.top = 0; box.front = 0;
+        box.right = ptrWidth; box.bottom = ptrHeight; box.back = 1;
 
         return true;
     }
@@ -774,46 +972,100 @@ namespace DxgiCapture {
         return true;
     }
 
+    void DesktopDuplicator::updateMouseFromWin32(LONG monitorLeft, LONG monitorTop) {
+        CURSORINFO ci{};
+        ci.cbSize = sizeof(ci);
+
+        if (!GetCursorInfo(&ci)) {
+            Logf("[DD][Win32Mouse] GetCursorInfo failed err=%lu", GetLastError());
+            return;
+        }
+
+        bool visible = (ci.flags & CURSOR_SHOWING) != 0;
+        POINT screenPos = ci.ptScreenPos;
+
+        // Convert screen -> monitor-local
+        POINT local{};
+        local.x = screenPos.x - monitorLeft;
+        local.y = screenPos.y - monitorTop;
+
+        pointerInfo_.setVisible(visible);
+        pointerInfo_.getPosition() = local;
+
+        Logf("[DD][Win32Mouse] visible=%d screenPos=(%ld,%ld) monitorOrigin=(%ld,%ld) localPos=(%ld,%ld) hCursor=%p",
+            (int)visible,
+            (long)screenPos.x, (long)screenPos.y,
+            (long)monitorLeft, (long)monitorTop,
+            (long)local.x, (long)local.y,
+            ci.hCursor);
+    }
+
+
     bool DesktopDuplicator::drawMouse(ID3D11Device* device,
         ID3D11RenderTargetView* rtv,
         const D3D11_BOX& cropBox) {
-        if (!pointerInfo_.isVisible() || pointerInfo_.getBufferSize() == 0) {
+
+        Logf("[DD][drawMouse] enter drawMouse=%d rtv=%p crop=(%u,%u)-(%u,%u)",
+            1, rtv,
+            (unsigned)cropBox.left, (unsigned)cropBox.top,
+            (unsigned)cropBox.right, (unsigned)cropBox.bottom);
+
+        Logf("[DD][drawMouse] pointer state: visible=%d pos=(%d,%d) shapeBuf=%u type=%u WxH=%ux%u pitch=%u",
+            (int)pointerInfo_.isVisible(),
+            (int)pointerInfo_.getPosition().x,
+            (int)pointerInfo_.getPosition().y,
+            (unsigned)pointerInfo_.getBufferSize(),
+            (unsigned)pointerInfo_.getShapeInfo().Type,
+            (unsigned)pointerInfo_.getShapeInfo().Width,
+            (unsigned)pointerInfo_.getShapeInfo().Height,
+            (unsigned)pointerInfo_.getShapeInfo().Pitch);
+
+        if (!pointerInfo_.isVisible()) {
+            Logf("[DD][drawMouse] SKIP: pointerInfo says not visible");
+            return true;
+        }
+
+        if (pointerInfo_.getBufferSize() == 0) {
+            Logf("[DD][drawMouse] SKIP: no pointer shape buffer yet (size=0)");
             return true;
         }
 
         if (!updateMouseTexture()) {
+            Logf("[DD][drawMouse] FAIL: updateMouseTexture() returned false");
             return false;
         }
 
-        // Screen dimensions (of the output texture)
         float screenW = static_cast<float>(cropBox.right - cropBox.left);
         float screenH = static_cast<float>(cropBox.bottom - cropBox.top);
 
-        // Mouse position relative to the crop box
-        const auto& shapeInfo = pointerInfo_.getShapeInfo();
         float mouseX = static_cast<float>(pointerInfo_.getPosition().x) - cropBox.left;
         float mouseY = static_cast<float>(pointerInfo_.getPosition().y) - cropBox.top;
 
         float ptrW = static_cast<float>(mouseTexDesc_.Width);
         float ptrH = static_cast<float>(mouseTexDesc_.Height);
 
-        // Calculate vertices in NDC (-1 to 1)
+        Logf("[DD][drawMouse] screenWH=(%.1f,%.1f) mouseXY=(%.1f,%.1f) ptrWH=(%.1f,%.1f)",
+            screenW, screenH, mouseX, mouseY, ptrW, ptrH);
+
+        // If cursor is completely outside crop, log and still allow (but it won't be visible)
+        if (mouseX > screenW || mouseY > screenH || (mouseX + ptrW) < 0.0f || (mouseY + ptrH) < 0.0f) {
+            Logf("[DD][drawMouse] NOTE: cursor quad outside crop region -> will not be visible");
+        }
+
         float left = (mouseX / screenW) * 2.0f - 1.0f;
         float right = ((mouseX + ptrW) / screenW) * 2.0f - 1.0f;
         float top = -((mouseY / screenH) * 2.0f - 1.0f);
         float bottom = -(((mouseY + ptrH) / screenH) * 2.0f - 1.0f);
 
+        Logf("[DD][drawMouse] NDC quad LRTB=(%.3f, %.3f, %.3f, %.3f)", left, right, top, bottom);
+
         Vertex vertices[6];
-
-        // Quad - Triangle 1
-        vertices[0] = Vertex(left, bottom, 0.0f, 0.0f, 1.0f);  // Bottom-Left
-        vertices[1] = Vertex(left, top, 0.0f, 0.0f, 0.0f);     // Top-Left
-        vertices[2] = Vertex(right, bottom, 0.0f, 1.0f, 1.0f); // Bottom-Right
-
-        // Quad - Triangle 2
-        vertices[3] = vertices[2];                             // Bottom-Right
-        vertices[4] = vertices[1];                             // Top-Left
-        vertices[5] = Vertex(right, top, 0.0f, 1.0f, 0.0f);    // Top-Right
+        vertices[0] = Vertex(left, bottom, 0.0f, 0.0f, 1.0f);
+        vertices[1] = Vertex(left, top, 0.0f, 0.0f, 0.0f);
+        vertices[2] = Vertex(right, bottom, 0.0f, 1.0f, 1.0f);
+        vertices[3] = vertices[2];
+        vertices[4] = vertices[1];
+        vertices[5] = Vertex(right, top, 0.0f, 1.0f, 0.0f);
 
         D3D11_BUFFER_DESC bd = {};
         bd.Usage = D3D11_USAGE_DEFAULT;
@@ -824,7 +1076,9 @@ namespace DxgiCapture {
         initData.pSysMem = vertices;
 
         ComPtr<ID3D11Buffer> vBuffer;
-        if (FAILED(device_->CreateBuffer(&bd, &initData, &vBuffer))) {
+        HRESULT hrVB = device_->CreateBuffer(&bd, &initData, &vBuffer);
+        if (FAILED(hrVB)) {
+            Logf("[DD][drawMouse] FAIL: CreateBuffer hr=0x%08X", (unsigned)hrVB);
             return false;
         }
 
@@ -845,11 +1099,11 @@ namespace DxgiCapture {
         ID3D11SamplerState* samplers[] = { shaderResources_->getSampler() };
         context_->PSSetSamplers(0, 1, samplers);
 
-        float blendFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        float blendFactor[4] = { 0,0,0,0 };
         context_->OMSetBlendState(shaderResources_->getBlendState(), blendFactor, 0xFFFFFFFF);
         context_->OMSetRenderTargets(1, &rtv, nullptr);
 
-        D3D11_VIEWPORT vp;
+        D3D11_VIEWPORT vp{};
         vp.Width = screenW;
         vp.Height = screenH;
         vp.MinDepth = 0.0f;
@@ -859,6 +1113,7 @@ namespace DxgiCapture {
         context_->RSSetViewports(1, &vp);
 
         context_->Draw(6, 0);
+        Logf("[DD][drawMouse] Draw issued.");
 
         // Cleanup
         ID3D11ShaderResourceView* nullSRV = nullptr;
@@ -866,6 +1121,7 @@ namespace DxgiCapture {
 
         return true;
     }
+
 
     void DesktopDuplicator::setMoveRect(RECT& srcRect, RECT& dstRect,
         const DXGI_OUTDUPL_MOVE_RECT& moveRect,
@@ -1035,6 +1291,7 @@ namespace DxgiCapture {
     }
 
     CaptureResult CaptureDevice::prepare() {
+        
         std::lock_guard<std::recursive_mutex> lock(mutex_);
 
         if (prepared_) {
@@ -1072,49 +1329,85 @@ namespace DxgiCapture {
         ID3D11RenderTargetView* rtv,
         const D3D11_BOX& cropBox,
         bool drawMouse) {
+
         std::lock_guard<std::recursive_mutex> lock(mutex_);
 
+        Logf("[CD][capture] begin prepared=%d drawMouse=%d targetDevice=%p tex=%p rtv=%p crop=(%u,%u)-(%u,%u)",
+            (int)prepared_, (int)drawMouse, targetDevice, texture, rtv,
+            (unsigned)cropBox.left, (unsigned)cropBox.top,
+            (unsigned)cropBox.right, (unsigned)cropBox.bottom);
+
         if (!prepared_) {
-            auto result = prepare();
-            if (result != CaptureResult::Success) {
-                return result;
-            }
+            auto prep = prepare();
+            Logf("[CD][capture] prepare -> %d", (int)prep);
+            if (prep != CaptureResult::Success) return prep;
         }
 
-        UINT width, height;
+        UINT width = 0, height = 0;
         getSize(width, height);
 
-        // Validate crop box
         if (cropBox.left >= width || cropBox.right > width ||
-            cropBox.top >= height || cropBox.bottom > height) {
+            cropBox.top >= height || cropBox.bottom > height ||
+            cropBox.right <= cropBox.left || cropBox.bottom <= cropBox.top) {
+            Logf("[CD][capture] INVALID cropBox for current size -> SizeChanged");
             return CaptureResult::SizeChanged;
         }
 
-        // Capture frame
-        auto result = duplicator_->capture();
-        if (result != CaptureResult::Success && result != CaptureResult::Timeout) {
+        // 1) Acquire frame (may Timeout)
+        auto capRes = duplicator_->capture();
+        Logf("[CD][capture] duplicator_->capture() -> %d", (int)capRes);
+
+        if (capRes != CaptureResult::Success && capRes != CaptureResult::Timeout) {
+            Logf("[CD][capture] capture fatal-ish -> resetting duplicator");
             duplicator_.reset();
             prepared_ = false;
-            return result;
+            return capRes;
         }
 
-        if (result == CaptureResult::Timeout) {
-            return result;
+        // 2) If timeout, still update mouse position so it stays smooth
+        if (capRes == CaptureResult::Timeout && drawMouse) {
+            Logf("[CD][capture] Timeout: updating mouse via Win32 fallback for smooth cursor");
+            duplicator_->updateMouseFromWin32(bounds_.coordinates.left, bounds_.coordinates.top);
         }
 
-        // Copy to texture
-        result = duplicator_->copyToTexture(targetDevice, texture, cropBox);
-        if (result != CaptureResult::Success) {
-            return result;
+        // 3) Always copy last known desktop image into targetTexture
+        auto copyRes = duplicator_->copyToTexture(targetDevice, texture, cropBox);
+        Logf("[CD][capture] copyToTexture -> %d", (int)copyRes);
+        if (copyRes != CaptureResult::Success) return copyRes;
+
+        // 4) Auto-suppress cursor during window resize/move to prevent
+        //    duplicate cursors (the real system cursor + our composited one).
+        //    GUI_INMOVESIZE is set by Windows during any size/move modal loop.
+        if (drawMouse) {
+            HWND fg = GetForegroundWindow();
+            if (fg) {
+                DWORD fgPid = 0;
+                DWORD fgTid = GetWindowThreadProcessId(fg, &fgPid);
+                if (fgPid == GetCurrentProcessId()) {
+                    GUITHREADINFO gti{};
+                    gti.cbSize = sizeof(gti);
+                    if (GetGUIThreadInfo(fgTid, &gti) && (gti.flags & GUI_INMOVESIZE)) {
+                        Logf("[CD][capture] Suppressing cursor: foreground window is in size/move loop");
+                        drawMouse = false;
+                    }
+                }
+            }
         }
 
-        // Draw mouse if requested
-        if (drawMouse && rtv) {
-            duplicator_->drawMouse(targetDevice, rtv, cropBox);
+        // Draw mouse cursor (if still requested + have rtv)
+        if (drawMouse) {
+            if (!rtv) {
+                Logf("[CD][capture] !!! WARNING: drawMouse requested but rtv is NULL. Cursor cannot be drawn.");
+                return capRes; // return Timeout/Success
+            }
+            bool ok = duplicator_->drawMouse(targetDevice, rtv, cropBox);
+            Logf("[CD][capture] drawMouse -> %d", (int)ok);
         }
 
-        return CaptureResult::Success;
+        Logf("[CD][capture] end returning %d", (int)capRes);
+        return capRes; // keep Timeout so caller can know
     }
+
 
     int64_t CaptureDevice::luidToInt64(const LUID& luid) {
         LARGE_INTEGER li;

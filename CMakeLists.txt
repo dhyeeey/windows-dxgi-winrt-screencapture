@@ -2,6 +2,10 @@
 
 project ("WindowsDxgiScreenCapture")
 
+set(GLFW_ROOT "${CMAKE_SOURCE_DIR}/glfw-3.4.bin.WIN64")
+set(GLFW_INCLUDE_DIR "${GLFW_ROOT}/include")
+set(GLFW_LIB_DIR     "${GLFW_ROOT}/lib-vc2022")
+
 set(WIN_LIBS
 
     # --- DirectX / Graphics Libraries ---
@@ -11,6 +15,9 @@ set(WIN_LIBS
     dwmapi.lib
     windowscodecs.lib
     windowsapp.lib
+
+    winmm.lib
+    opengl32.lib
 
     # --- Windows System Libraries ---
     Ws2_32.lib
@@ -62,11 +69,17 @@ target_include_directories(WindowsDxgiScreenCapture PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/screencapturemethods"
     "${CMAKE_CURRENT_SOURCE_DIR}/util"
     "${CMAKE_CURRENT_SOURCE_DIR}/frameaccessmethod"
+    "${GLFW_INCLUDE_DIR}"
+)
+
+target_link_directories(WindowsDxgiScreenCapture PRIVATE
+    "${GLFW_LIB_DIR}"
 )
 
 target_link_libraries(WindowsDxgiScreenCapture
   PRIVATE
     ${WIN_LIBS}
+    glfw3_mt.lib
 )
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)

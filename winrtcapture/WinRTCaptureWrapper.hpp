@@ -14,7 +14,11 @@ public:
         catch (...) { return false; }
     }
 
-    CaptureStatus AcquireFrame(ID3D11DeviceContext* context, ID3D11Texture2D* targetTexture) override {
+    CaptureStatus AcquireFrame(
+        ID3D11DeviceContext* context,
+        ID3D11Texture2D* targetTexture,
+        ID3D11RenderTargetView* targetRTV = nullptr
+    ) override {
         if (!capturer_) return CaptureStatus::Error;
 
         UINT w, h;

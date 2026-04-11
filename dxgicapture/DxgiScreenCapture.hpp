@@ -275,6 +275,7 @@ namespace DxgiCapture {
         // ---------------- Information ----------------
         void getSize(UINT& width, UINT& height) const;
         const DXGI_OUTDUPL_DESC& getOutputDesc() const { return outputDesc_; }
+        void updateMouseFromWin32(LONG monitorLeft, LONG monitorTop);
 
     private:
         // Internal Helpers
@@ -355,6 +356,7 @@ namespace DxgiCapture {
         std::unique_ptr<FrameMetadata> metadata_;
         std::vector<BYTE> vertexBuffer_;
         PointerInfo pointerInfo_;
+        bool hasValidFrame_ = false; // indicates sharedTexture_ contains something meaningful
     };
 
     // ============================================================================

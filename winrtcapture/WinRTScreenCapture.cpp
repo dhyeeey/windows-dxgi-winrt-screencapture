@@ -17,12 +17,19 @@ namespace WinRTCapture {
     }
 
     WinRTAPILoader::~WinRTAPILoader() {
+        CoUninitialize();
         if (d3d11Module_) FreeLibrary(d3d11Module_);
         if (combaseModule_) FreeLibrary(combaseModule_);
         if (user32Module_) FreeLibrary(user32Module_);
     }
 
     bool WinRTAPILoader::initialize() {
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        /*if (FAILED(hr)) {
+            std::cerr << "Failed to initialize COM." << std::endl;
+            return -1;
+        }*/
+
         std::call_once(initFlag_, [this]() {
             loaded_ = loadLibraries() &&
                 loadD3D11Functions() &&
