@@ -1,4 +1,4 @@
-﻿cmake_minimum_required (VERSION 3.8)
+cmake_minimum_required (VERSION 3.8)
 
 project ("WindowsDxgiScreenCapture")
 
@@ -30,6 +30,11 @@ set(WIN_LIBS
     mfplat.lib     # Often required alongside mfuuid
 )
 
+# =========================================================================
+# Find FFmpeg via vcpkg
+# =========================================================================
+find_package(FFMPEG REQUIRED)
+
 # 3. Use static runtime: /MT for Release, /MTd for Debug
 if (MSVC)
     add_compile_options(
@@ -45,6 +50,8 @@ add_executable (WindowsDxgiScreenCapture "main.cpp"
                                  "util/ImageSaver.hpp" 
                                  "util/ThreadSafeQueue.hpp" 
                                  "frameaccessmethod/FrameCaptureAcessStrategies.hpp" 
+                                 "frameaccessmethod/RtpStreamStrategy.hpp"
+                                 "frameaccessmethod/RtpStreamStrategy.cpp"
                                  "winrtcapture/WinRTScreenCapture.hpp" 
                                  "winrtcapture/WinRTScreenCapture.cpp" 
                                  "screencapturemethods/IScreenCapture.hpp" 
@@ -62,13 +69,16 @@ target_include_directories(WindowsDxgiScreenCapture PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/screencapturemethods"
     "${CMAKE_CURRENT_SOURCE_DIR}/util"
     "${CMAKE_CURRENT_SOURCE_DIR}/frameaccessmethod"
+    ${FFMPEG_INCLUDE_DIRS}
 )
 
 target_link_libraries(WindowsDxgiScreenCapture
   PRIVATE
     ${WIN_LIBS}
+    ${FFMPEG_LIBRARIES}
 )
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET WindowsDxgiScreenCapture PROPERTY CXX_STANDARD 20)
 endif()
+

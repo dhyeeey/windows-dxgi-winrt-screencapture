@@ -18,7 +18,8 @@ enum class FrameType {
     Empty,
     SaveFrametoImage,   ///< Saves frames to Disk in jpg/png/bmp formats (CPU, Async).
     CpuAccess,          ///< Returns raw pixels to Main thread (CPU, Sync).
-    GpuDirect           ///< Returns D3D11 Texture pointer to Main thread (GPU, Zero-Copy).
+    GpuDirect,          ///< Returns D3D11 Texture pointer to Main thread (GPU, Zero-Copy).
+    RtpStream           ///< Encodes to H.264 and streams via RTP/UDP (Network, Real-time).
 };
 
 

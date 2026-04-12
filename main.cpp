@@ -1,5 +1,8 @@
-﻿#include "ScreenCaptureFactory.hpp"
+#include "ScreenCaptureFactory.hpp"
 #include "FrameCaptureAcessStrategies.hpp"   
+#include "RtpStreamStrategy.hpp"
+
+#include <csignal>
 
  // ==========================================
  // CONFIGURATION: Switch Modes Here
@@ -7,11 +10,29 @@
 
  // CaptureMethod::DXGI 
  // CaptureMethod::WinRT
-CaptureMethod CAPTURE_METHOD = CaptureMethod::DXGI;
+CaptureMethod CAPTURE_METHOD = CaptureMethod::WinRT;
 
-FrameType FRAME_TYPE = FrameType::GpuDirect;
+// FrameType::GpuDirect
+// FrameType::CpuAccess
+// FrameType::SaveFrametoImage
+// FrameType::RtpStream          <-- NEW: Real-time H.264 streaming over RTP
+FrameType FRAME_TYPE = FrameType::RtpStream;
 
 using ull = unsigned long long;
+
+// ==========================================
+// Ctrl+C Signal Handler for clean shutdown
+// ==========================================
+static volatile bool g_running = true;
+
+BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
+    if (ctrlType == CTRL_C_EVENT || ctrlType == CTRL_BREAK_EVENT || ctrlType == CTRL_CLOSE_EVENT) {
+        std::cout << "\n[Main] Shutdown signal received. Stopping capture..." << std::endl;
+        g_running = false;
+        return TRUE;
+    }
+    return FALSE;
+}
 
 int main() {
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -19,6 +40,9 @@ int main() {
         std::cerr << "Failed to initialize COM." << std::endl;
         return -1;
     }
+
+    // Register Ctrl+C handler
+    SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
@@ -90,24 +114,44 @@ int main() {
         std::cout << "[Strategy] GPU Direct (Texture Pointer)" << std::endl;
         strategy = std::make_unique<GpuDirectStrategy>();
         break;
+    case FrameType::RtpStream: {
+        std::cout << "[Strategy] RTP Stream (H.264 over UDP)" << std::endl;
+        RtpStreamConfig rtpConfig;
+        rtpConfig.destIp = "127.0.0.1";
+        rtpConfig.destPort = 5004;
+        rtpConfig.fps = 30;
+        rtpConfig.bitrate = 4'000'000;   // 4 Mbps
+        rtpConfig.sdpFilePath = "stream.sdp";
+        strategy = std::make_unique<RtpStreamStrategy>(rtpConfig);
+        break;
+    }
     }
 
     strategy->Initialize(device.Get(), width, height);
 
-    ull n_frames = 30ULL;
-
     // =========================================================
     // Main Loop
     // =========================================================
-    std::cout << "Starting loop " << "(" << n_frames << ") " << "..." << std::endl;
+    // For RTP streaming, run continuously until Ctrl+C.
+    // For other modes, run for a fixed number of frames.
+    bool continuousMode = (FRAME_TYPE == FrameType::RtpStream);
+    ull n_frames = continuousMode ? 0ULL : 30ULL;
+    ull frameIndex = 0;
 
-    for (ull i = 0; i < n_frames; ++i) {
+    if (continuousMode) {
+        std::cout << "Starting continuous capture loop (Ctrl+C to stop)..." << std::endl;
+    }
+    else {
+        std::cout << "Starting loop (" << n_frames << ") ..." << std::endl;
+    }
+
+    while (g_running && (continuousMode || frameIndex < n_frames)) {
 
         CaptureStatus status = captureSession->AcquireFrame(context.Get(), targetTexture.Get());
 
         if (status == CaptureStatus::Success) {
 
-            std::optional<FrameData> output = strategy->ProcessFrame(context.Get(), targetTexture.Get(), i);
+            std::optional<FrameData> output = strategy->ProcessFrame(context.Get(), targetTexture.Get(), static_cast<int>(frameIndex));
 
             // C. Handle Returned Data (Optional)
             if (output.has_value()) {
@@ -126,9 +170,7 @@ int main() {
 
                 }
             }
-            else {
-                std::cout << "Empty frame ...." << std::endl;
-            }
+            // For RTP mode, no output is returned (frames sent directly to network)
         }
         else if (status == CaptureStatus::Timeout) {
 
@@ -142,8 +184,10 @@ int main() {
             break;
         }
 
+        ++frameIndex;
+
         // Cap framerate (~30 FPS)
-        std::this_thread::sleep_for(std::chrono::milliseconds(33));
+        //std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }
 
     // Cleanup
