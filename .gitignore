@@ -361,3 +361,29 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# ---------------------------------------------------------------------------
+# Project-specific (CMake / this repo)
+# ---------------------------------------------------------------------------
+# Alternate/local CMake build trees (presets use out/, which is already ignored)
+[Bb]uild/
+cmake-build-*/
+
+# Machine-local CMake preset overrides (keep CMakePresets.json tracked)
+CMakeUserPresets.json
+
+# Accidental in-source CMake clutter
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+Testing/
+
+# Local scratch commit message helper
+commit-msg.txt
+
+# Saved capture frames / screenshots from running the app
+capture_*.png
+capture_*.jpg
+capture_*.jpeg
+capture_*.bmp

@@ -2,9 +2,7 @@
 
 project ("WindowsDxgiScreenCapture")
 
-set(GLFW_ROOT "${CMAKE_SOURCE_DIR}/glfw-3.4.bin.WIN64")
-set(GLFW_INCLUDE_DIR "${GLFW_ROOT}/include")
-set(GLFW_LIB_DIR     "${GLFW_ROOT}/lib-vc2022")
+add_subdirectory(glfw-3.4.bin.WIN64)
 
 set(WIN_LIBS
 
@@ -46,40 +44,53 @@ if (MSVC)
 endif()
 
 # Add source to this project's executable.
-add_executable (WindowsDxgiScreenCapture "main.cpp" 
-                                 "dxgicapture/DxgiScreenCapture.hpp" 
-                                 "dxgicapture/DxgiScreenCapture.cpp" 
-                                 "util/ImageSaver.hpp" 
-                                 "util/ThreadSafeQueue.hpp" 
-                                 "frameaccessmethod/FrameCaptureAcessStrategies.hpp" 
-                                 "winrtcapture/WinRTScreenCapture.hpp" 
-                                 "winrtcapture/WinRTScreenCapture.cpp" 
-                                 "screencapturemethods/IScreenCapture.hpp" 
-                                 "dxgicapture/DxgiCaptureWrapper.hpp" 
-                                 "winrtcapture/WinRTCaptureWrapper.hpp" 
-                                 "screencapturemethods/ScreenCaptureFactory.hpp")
+add_executable (WindowsDxgiScreenCapture
+    "main.cpp"
+    "app/CaptureApp.cpp"
+    "app/CaptureApp.hpp"
+    "app/RenderLoop.cpp"
+    "app/RenderLoop.hpp"
+    "app/RenderContext.hpp"
+    "app/Log.hpp"
+    "app/D3dUtil.hpp"
+    "presenter/LetterboxPresenter.cpp"
+    "presenter/LetterboxPresenter.hpp"
+    "platform/IWindowHost.hpp"
+    "platform/glfw/GlfwWindowHost.cpp"
+    "platform/glfw/GlfwWindowHost.hpp"
+    "dxgicapture/DxgiScreenCapture.hpp"
+    "dxgicapture/DxgiScreenCapture.cpp"
+    "util/ImageSaver.hpp"
+    "util/ThreadSafeQueue.hpp"
+    "frameaccessmethod/FrameCaptureAcessStrategies.hpp"
+    "winrtcapture/WinRTScreenCapture.hpp"
+    "winrtcapture/WinRTScreenCapture.cpp"
+    "screencapturemethods/IScreenCapture.hpp"
+    "dxgicapture/DxgiCaptureWrapper.hpp"
+    "winrtcapture/WinRTCaptureWrapper.hpp"
+    "screencapturemethods/ScreenCaptureFactory.hpp"
+)
 
 # =========================================================================
 # 4. ADD INCLUDE DIRECTORIES HERE
 # =========================================================================
-target_include_directories(WindowsDxgiScreenCapture PRIVATE 
-    "${CMAKE_CURRENT_SOURCE_DIR}"              
-    "${CMAKE_CURRENT_SOURCE_DIR}/dxgicapture"   
-    "${CMAKE_CURRENT_SOURCE_DIR}/winrtcapture"  
+target_include_directories(WindowsDxgiScreenCapture PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/app"
+    "${CMAKE_CURRENT_SOURCE_DIR}/presenter"
+    "${CMAKE_CURRENT_SOURCE_DIR}/platform"
+    "${CMAKE_CURRENT_SOURCE_DIR}/platform/glfw"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dxgicapture"
+    "${CMAKE_CURRENT_SOURCE_DIR}/winrtcapture"
     "${CMAKE_CURRENT_SOURCE_DIR}/screencapturemethods"
     "${CMAKE_CURRENT_SOURCE_DIR}/util"
     "${CMAKE_CURRENT_SOURCE_DIR}/frameaccessmethod"
-    "${GLFW_INCLUDE_DIR}"
-)
-
-target_link_directories(WindowsDxgiScreenCapture PRIVATE
-    "${GLFW_LIB_DIR}"
 )
 
 target_link_libraries(WindowsDxgiScreenCapture
   PRIVATE
     ${WIN_LIBS}
-    glfw3_mt.lib
+    glfw
 )
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)

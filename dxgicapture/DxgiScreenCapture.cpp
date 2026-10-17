@@ -982,19 +982,36 @@ namespace DxgiCapture {
         }
 
         bool visible = (ci.flags & CURSOR_SHOWING) != 0;
-        POINT screenPos = ci.ptScreenPos;
 
-        // Convert screen -> monitor-local
+        // GetCursorInfo::ptScreenPos is the hotspot in screen space.
+        // DXGI drawMouse expects the shape's top-left (MS docs / Desktop Duplication sample).
+        LONG hotX = 0;
+        LONG hotY = 0;
+        if (pointerInfo_.getBufferSize() > 0) {
+            hotX = pointerInfo_.getShapeInfo().HotSpot.x;
+            hotY = pointerInfo_.getShapeInfo().HotSpot.y;
+        }
+        else if (ci.hCursor) {
+            ICONINFO ii{};
+            if (GetIconInfo(ci.hCursor, &ii)) {
+                hotX = static_cast<LONG>(ii.xHotspot);
+                hotY = static_cast<LONG>(ii.yHotspot);
+                if (ii.hbmMask) DeleteObject(ii.hbmMask);
+                if (ii.hbmColor) DeleteObject(ii.hbmColor);
+            }
+        }
+
         POINT local{};
-        local.x = screenPos.x - monitorLeft;
-        local.y = screenPos.y - monitorTop;
+        local.x = ci.ptScreenPos.x - monitorLeft - hotX;
+        local.y = ci.ptScreenPos.y - monitorTop - hotY;
 
         pointerInfo_.setVisible(visible);
         pointerInfo_.getPosition() = local;
 
-        Logf("[DD][Win32Mouse] visible=%d screenPos=(%ld,%ld) monitorOrigin=(%ld,%ld) localPos=(%ld,%ld) hCursor=%p",
+        Logf("[DD][Win32Mouse] visible=%d screenPos=(%ld,%ld) hotspot=(%ld,%ld) monitorOrigin=(%ld,%ld) localTopLeft=(%ld,%ld) hCursor=%p",
             (int)visible,
-            (long)screenPos.x, (long)screenPos.y,
+            (long)ci.ptScreenPos.x, (long)ci.ptScreenPos.y,
+            (long)hotX, (long)hotY,
             (long)monitorLeft, (long)monitorTop,
             (long)local.x, (long)local.y,
             ci.hCursor);
@@ -1364,13 +1381,19 @@ namespace DxgiCapture {
             return capRes;
         }
 
-        // 2) If timeout, still update mouse position so it stays smooth
-        if (capRes == CaptureResult::Timeout && drawMouse) {
-            Logf("[CD][capture] Timeout: updating mouse via Win32 fallback for smooth cursor");
-            duplicator_->updateMouseFromWin32(bounds_.coordinates.left, bounds_.coordinates.top);
+        // 2) Timeout: no new desktop frame. Refresh pointer position only and return
+        //    without copy/draw — those are expensive and unused until the next Success
+        //    Present. Keeping this path light lets us poll AcquireNextFrame promptly.
+        if (capRes == CaptureResult::Timeout) {
+            if (drawMouse) {
+                Logf("[CD][capture] Timeout: updating mouse via Win32 fallback for smooth cursor");
+                duplicator_->updateMouseFromWin32(bounds_.coordinates.left, bounds_.coordinates.top);
+            }
+            Logf("[CD][capture] Timeout: skip copy/draw, return promptly");
+            return CaptureResult::Timeout;
         }
 
-        // 3) Always copy last known desktop image into targetTexture
+        // 3) Copy desktop image into targetTexture
         auto copyRes = duplicator_->copyToTexture(targetDevice, texture, cropBox);
         Logf("[CD][capture] copyToTexture -> %d", (int)copyRes);
         if (copyRes != CaptureResult::Success) return copyRes;
