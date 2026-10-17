@@ -70,17 +70,13 @@ void RunRenderLoop(RenderContext& threadCtx, CaptureMethod captureMethod, FrameT
     Log("Render", "Target RTV Created (for cursor compositing).");
 
     std::unique_ptr<IFrameCaptureAccessStrategy> strategy;
-    if (frameType == FrameType::GpuDirect) {
-        strategy = std::make_unique<GpuDirectStrategy>();
-        Log("Render", "Strategy Selected: GPU Direct");
-    }
-    else if (frameType == FrameType::CpuAccess) {
+    if (frameType == FrameType::CpuAccess) {
         strategy = std::make_unique<CpuAccessStrategy>();
         Log("Render", "Strategy Selected: CPU Access");
     }
     else {
-        strategy = std::make_unique<FrametoImageSavingMultiThreadedStrategy>();
-        Log("Render", "Strategy Selected: Save to Image");
+        strategy = std::make_unique<GpuDirectStrategy>();
+        Log("Render", "Strategy Selected: GPU Direct");
     }
 
     strategy->Initialize(device.Get(), width, height);

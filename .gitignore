@@ -381,9 +381,3 @@ Testing/
 
 # Local scratch commit message helper
 commit-msg.txt
-
-# Saved capture frames / screenshots from running the app
-capture_*.png
-capture_*.jpg
-capture_*.jpeg
-capture_*.bmp

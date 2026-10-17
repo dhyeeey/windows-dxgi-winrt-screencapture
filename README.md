@@ -17,15 +17,14 @@ Switch engines with `CaptureMethod` in [`main.cpp`](main.cpp) (passed into `Capt
 
 The demo app currently initializes capture on the **primary monitor** (`MonitorFromPoint` in `RunRenderLoop`).
 
-### Frame processing strategies
+### Frame access strategies
 
-Choose with `FrameType`:
+Choose with `FrameType` (mirroring always presents; strategy selects how the frame is exposed):
 
 | Mode | Enum | Behavior |
 | --- | --- | --- |
-| GPU Direct | `FrameType::GpuDirect` | Keep `ID3D11Texture2D` in VRAM (preview / encode path) |
-| CPU Access | `FrameType::CpuAccess` | Map staging texture → CPU buffer |
-| Save to image | `FrameType::SaveFrametoImage` | Background thread encodes JPG/PNG/BMP via WIC |
+| GPU Direct | `FrameType::GpuDirect` | Keep `ID3D11Texture2D` in VRAM (default preview path) |
+| CPU Access | `FrameType::CpuAccess` | Map staging texture → CPU BGRA buffer |
 
 ### Preview window
 
@@ -55,25 +54,30 @@ main.cpp
 | Platform | `platform/` | `IWindowHost`; `glfw/GlfwWindowHost` |
 | Presenter | `presenter/` | Letterboxed D3D11 present |
 | Capture | `screencapturemethods/`, `dxgicapture/`, `winrtcapture/` | Factory + engines |
-| Frames | `frameaccessmethod/` | Strategy pattern for post-capture use |
-| Util | `util/` | `ImageSaver` (WIC), `ThreadSafeQueue` |
+| Frames | `frameaccessmethod/` | GPU Direct / CPU Access strategies |
 
 To use another window library, implement `IWindowHost` and pass it to `CaptureApp::run` instead of `GlfwWindowHost`. On the CMake side, vendor that library similarly to `glfw-3.4.bin.WIN64/` and link its imported target.
 
 ---
 
-## Configuration
+## Configuration (CLI)
 
-Edit [`main.cpp`](main.cpp):
+Run the built executable with optional flags. Defaults are **DXGI** + **GPU** access when no args are given.
 
-```cpp
-GlfwWindowHost window;
-CaptureApp app;
-const bool ok = app.run(window, CaptureMethod::DXGI, FrameType::GpuDirect);
+```bat
+WindowsScreenCapture.exe
+WindowsScreenCapture.exe --capture winrt --access cpu
+WindowsScreenCapture.exe -c dxgi -a gpu
+WindowsScreenCapture.exe --help
 ```
 
-- **Capture:** `CaptureMethod::DXGI` or `CaptureMethod::WinRT`
-- **Frames:** `FrameType::GpuDirect`, `FrameType::CpuAccess`, or `FrameType::SaveFrametoImage`
+| Flag | Values | Default |
+| --- | --- | --- |
+| `-c`, `--capture` | `dxgi`, `winrt` | `dxgi` |
+| `-a`, `--access` | `gpu` (or `gpudirect`), `cpu` (or `cpuaccess`) | `gpu` |
+| `-h`, `--help` | | print usage |
+
+You can still call `CaptureApp::run(...)` from code with the same enums if you embed the library-style entry path.
 
 ---
 
@@ -93,7 +97,7 @@ Windows SDK provides Direct3D 11 and WinRT headers; no legacy DirectX SDK is req
 1. Clone the repository.
 2. **File → Open → Folder** on the repo root.
 3. Select a CMake preset (e.g. `x64-debug` from [`CMakePresets.json`](CMakePresets.json); output under `out/build/...`).
-4. Build and run target `WindowsDxgiScreenCapture`.
+4. Build and run target `WindowsScreenCapture`.
 
 ### Build (CLI)
 
@@ -102,11 +106,26 @@ cmake -S . -B out/build/x64-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build out/build/x64-debug
 ```
 
+#### Static vs dynamic MSVC runtime
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `USE_STATIC_RUNTIME=ON` | yes | `/MT` / `/MTd` + `glfw3_mt.lib` |
+| `USE_STATIC_RUNTIME=OFF` | | `/MD` / `/MDd` + `glfw3.lib` |
+
+```bat
+rem Dynamic CRT (requires matching VC++ redistributable on the target machine)
+cmake -S . -B out/build/x64-debug-md -G Ninja -DCMAKE_BUILD_TYPE=Debug -DUSE_STATIC_RUNTIME=OFF
+cmake --build out/build/x64-debug-md
+```
+
+Reconfigure (or use a fresh binary dir) after changing this option so the CRT flags and GLFW lib stay in sync.
+
 Root [`CMakeLists.txt`](CMakeLists.txt) pulls in GLFW with:
 
 ```cmake
 add_subdirectory(glfw-3.4.bin.WIN64)
-target_link_libraries(WindowsDxgiScreenCapture PRIVATE ... glfw)
+target_link_libraries(WindowsScreenCapture PRIVATE ... glfw)
 ```
 
 ---

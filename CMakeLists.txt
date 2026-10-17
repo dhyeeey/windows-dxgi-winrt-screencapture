@@ -1,7 +1,12 @@
 ﻿cmake_minimum_required (VERSION 3.8)
 
-project ("WindowsDxgiScreenCapture")
+project ("WindowsScreenCapture")
 
+# Link MSVC CRT statically (/MT, /MTd) when ON; dynamically (/MD, /MDd) when OFF.
+# Also selects the matching prebuilt GLFW library (glfw3_mt.lib vs glfw3.lib).
+option(USE_STATIC_RUNTIME "Link the MSVC C/C++ runtime statically (/MT)" ON)
+
+# Must come after the option so glfw-3.4.bin.WIN64 can read USE_STATIC_RUNTIME.
 add_subdirectory(glfw-3.4.bin.WIN64)
 
 set(WIN_LIBS
@@ -11,7 +16,6 @@ set(WIN_LIBS
     dxgi.lib
     d3dcompiler.lib
     dwmapi.lib
-    windowscodecs.lib
     windowsapp.lib
 
     winmm.lib
@@ -35,16 +39,28 @@ set(WIN_LIBS
     mfplat.lib     # Often required alongside mfuuid
 )
 
-# 3. Use static runtime: /MT for Release, /MTd for Debug
 if (MSVC)
-    add_compile_options(
-        $<$<CONFIG:Release>:/MT>
-        $<$<CONFIG:Debug>:/MTd>
-    )
+    if (USE_STATIC_RUNTIME)
+        message(STATUS "MSVC runtime: static (/MT, /MTd)")
+        add_compile_options(
+            $<$<CONFIG:Release>:/MT>
+            $<$<CONFIG:Debug>:/MTd>
+            $<$<CONFIG:RelWithDebInfo>:/MT>
+            $<$<CONFIG:MinSizeRel>:/MT>
+        )
+    else()
+        message(STATUS "MSVC runtime: dynamic (/MD, /MDd)")
+        add_compile_options(
+            $<$<CONFIG:Release>:/MD>
+            $<$<CONFIG:Debug>:/MDd>
+            $<$<CONFIG:RelWithDebInfo>:/MD>
+            $<$<CONFIG:MinSizeRel>:/MD>
+        )
+    endif()
 endif()
 
 # Add source to this project's executable.
-add_executable (WindowsDxgiScreenCapture
+add_executable (WindowsScreenCapture
     "main.cpp"
     "app/CaptureApp.cpp"
     "app/CaptureApp.hpp"
@@ -60,8 +76,6 @@ add_executable (WindowsDxgiScreenCapture
     "platform/glfw/GlfwWindowHost.hpp"
     "dxgicapture/DxgiScreenCapture.hpp"
     "dxgicapture/DxgiScreenCapture.cpp"
-    "util/ImageSaver.hpp"
-    "util/ThreadSafeQueue.hpp"
     "frameaccessmethod/FrameCaptureAcessStrategies.hpp"
     "winrtcapture/WinRTScreenCapture.hpp"
     "winrtcapture/WinRTScreenCapture.cpp"
@@ -74,7 +88,7 @@ add_executable (WindowsDxgiScreenCapture
 # =========================================================================
 # 4. ADD INCLUDE DIRECTORIES HERE
 # =========================================================================
-target_include_directories(WindowsDxgiScreenCapture PRIVATE
+target_include_directories(WindowsScreenCapture PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/app"
     "${CMAKE_CURRENT_SOURCE_DIR}/presenter"
@@ -83,16 +97,15 @@ target_include_directories(WindowsDxgiScreenCapture PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/dxgicapture"
     "${CMAKE_CURRENT_SOURCE_DIR}/winrtcapture"
     "${CMAKE_CURRENT_SOURCE_DIR}/screencapturemethods"
-    "${CMAKE_CURRENT_SOURCE_DIR}/util"
     "${CMAKE_CURRENT_SOURCE_DIR}/frameaccessmethod"
 )
 
-target_link_libraries(WindowsDxgiScreenCapture
+target_link_libraries(WindowsScreenCapture
   PRIVATE
     ${WIN_LIBS}
     glfw
 )
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
-  set_property(TARGET WindowsDxgiScreenCapture PROPERTY CXX_STANDARD 20)
+  set_property(TARGET WindowsScreenCapture PROPERTY CXX_STANDARD 20)
 endif()
