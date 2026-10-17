@@ -33,7 +33,14 @@ public:
     virtual bool Initialize(ID3D11Device* device, HMONITOR monitor) = 0;
 
     // Capture a frame into the target texture
-    virtual CaptureStatus AcquireFrame(ID3D11DeviceContext* context, ID3D11Texture2D* targetTexture) = 0;
+    //virtual CaptureStatus AcquireFrame(ID3D11DeviceContext* context, ID3D11Texture2D* targetTexture) = 0;
+    // Capture a frame into the target texture
+    virtual CaptureStatus AcquireFrame(
+        ID3D11DeviceContext* context,
+        ID3D11Texture2D* targetTexture,
+        ID3D11RenderTargetView* targetRTV = nullptr
+    ) = 0;
+
 
     // Get width/height of the captured area
     virtual void GetSize(UINT& width, UINT& height) = 0;

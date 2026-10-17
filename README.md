@@ -1,126 +1,153 @@
-﻿# 🖥️ Windows Screen Capture
+﻿# Windows DXGI / WinRT Screen Capture
 
-A high-performance, modular C++ library for capturing Windows screens.
-
-This project implements a **Dual-Engine Architecture**, allowing you to seamlessly switch between the classic **DXGI Desktop Duplication API** and the modern **Windows.Graphics.Capture (WinRT)** API. It decouples the *Capture Mechanism* from the *Frame Processing Logic*, giving you total control over how frames are handled (Disk, CPU, or GPU).
+High-performance C++ screen capture for Windows with a dual-engine design: classic **DXGI Desktop Duplication** and modern **Windows.Graphics.Capture (WinRT)**. Capture is decoupled from frame handling (GPU texture, CPU pixels, or async image save), and the UI shell is decoupled from the window library so GLFW can be swapped for another host.
 
 ---
 
-## 🚀 Key Features
+## Features
 
-### 1. Dual Capture Engines (Factory Pattern)
+### Dual capture engines
 
-Switch between capture methods with a single enum.
+Switch engines with `CaptureMethod` in [`main.cpp`](main.cpp) (passed into `CaptureApp::run`).
 
-* **DXGI Engine:** Uses Desktop Duplication API. Best for high-performance full-monitor capture on Windows 7/8/10.
-* **WinRT Engine:** Uses `Windows.Graphics.Capture`. Modern API that supports specific window capture, cursor exclusion, and survives GPU driver resets/hybrid GPU switching.
-
-### 2. Flexible Frame Processing (Strategy Pattern)
-
-Decouple *how* you get the frame from *what* you do with it.
-
-* **⚡ GPU Direct:** Zero-copy access to the `ID3D11Texture2D`. Ideal for NVENC/AMF video encoding or Direct3D rendering.
-* **🧠 CPU Access:** Efficiently copies data to system RAM (mapped staging textures) for OpenCV/AI analysis.
-* **💾 Async Disk Saving:** Multi-threaded pipeline using a thread-safe queue to save frames (JPG/PNG) without blocking the capture loop.
-
-### 3. High Performance
-
-* **Zero-Copy Capture:** Frames remain in VRAM unless explicitly requested.
-* **Dirty Rect Optimization:** (DXGI) Only redraws changed regions.
-* **Hardware Cursor:** Automatically composites the system mouse cursor (even hardware cursors) onto the frame.
-
----
-
-## 🏗️ Architecture
-
-| Component | Responsibility | Implementation Class |
+| Engine | API | Notes |
 | --- | --- | --- |
-| **Capture Factory** | Creates the requested capture engine. | `ScreenCaptureFactory` |
-| **Capture Engine** | Talks to the OS to get a frame into a Texture. | `DxgiCaptureWrapper`, `WinRTCaptureWrapper` |
-| **Access Strategy** | Processes the texture (Copy, Save, or Pass-through). | `GpuDirectStrategy`, `CpuAccessStrategy`, `FrametoImage...Strategy` |
+| **DXGI** | Desktop Duplication | Full-monitor capture; dirty/move rects; manual hardware-cursor compositing |
+| **WinRT** | `Windows.Graphics.Capture` | Monitor (and library support for window) capture; OS cursor via `IsCursorCaptureEnabled` |
+
+The demo app currently initializes capture on the **primary monitor** (`MonitorFromPoint` in `RunRenderLoop`).
+
+### Frame access strategies
+
+Choose with `FrameType` (mirroring always presents; strategy selects how the frame is exposed):
+
+| Mode | Enum | Behavior |
+| --- | --- | --- |
+| GPU Direct | `FrameType::GpuDirect` | Keep `ID3D11Texture2D` in VRAM (default preview path) |
+| CPU Access | `FrameType::CpuAccess` | Map staging texture → CPU BGRA buffer |
+
+### Preview window
+
+- Resizable window via `IWindowHost` (default: GLFW).
+- Letterboxed D3D11 presentation (`LetterboxPresenter`).
+- DXGI path composites the hardware cursor onto the capture texture (hotspot-correct Win32 timeout fallback; Per-Monitor DPI aware).
 
 ---
 
-## 🛠️ Configuration & Usage
-
-The application is controlled via two simple configuration variables in `main.cpp`.
-
-### 1. Choose Capture Method
-
-```cpp
-// Options: CaptureMethod::DXGI or CaptureMethod::WinRT
-CaptureMethod CAPTURE_METHOD = CaptureMethod::WinRT; 
-
-```
-
-### 2. Choose Processing Mode
-
-```cpp
-// Options:
-// FrameType::GpuDirect       -> Fastest. Returns ID3D11Texture2D*.
-// FrameType::CpuAccess       -> Returns std::vector<uint8_t> (Raw Pixels).
-// FrameType::SaveFrametoImage -> Saves files to disk asynchronously.
-
-FrameType FRAME_TYPE = FrameType::GpuDirect;
-
-```
-
-### Example Output
+## Architecture
 
 ```text
-Initializing Capture Engine...
-Capturing screen using WinRT
-Capture Started. Resolution: 1920x1080
-[Strategy] GPU Direct (Texture Pointer)
-Starting loop (30) ...
- [Main] Received GPU Texture: 1920x1080 Addr: 000002A1B3F4D120
- [Main] Received GPU Texture: 1920x1080 Addr: 000002A1B3F4D120
-...
-Shutting down...
-
+main.cpp
+  └─ GlfwWindowHost (platform/glfw) ── implements IWindowHost
+  └─ CaptureApp::run
+        ├─ UI thread: window events, resize → RenderContext
+        └─ Render thread: RunRenderLoop
+              ├─ ScreenCaptureFactory → DxgiCaptureWrapper | WinRTCaptureWrapper
+              ├─ IFrameCaptureAccessStrategy (Gpu / CPU / Save)
+              └─ LetterboxPresenter → swapchain on HWND
 ```
+
+| Layer | Path | Role |
+| --- | --- | --- |
+| Entry | `main.cpp` | DPI setup; pick window host, capture method, frame type |
+| App | `app/` | `CaptureApp`, `RenderLoop`, `RenderContext`, logging |
+| Platform | `platform/` | `IWindowHost`; `glfw/GlfwWindowHost` |
+| Presenter | `presenter/` | Letterboxed D3D11 present |
+| Capture | `screencapturemethods/`, `dxgicapture/`, `winrtcapture/` | Factory + engines |
+| Frames | `frameaccessmethod/` | GPU Direct / CPU Access strategies |
+
+To use another window library, implement `IWindowHost` and pass it to `CaptureApp::run` instead of `GlfwWindowHost`. On the CMake side, vendor that library similarly to `glfw-3.4.bin.WIN64/` and link its imported target.
 
 ---
 
-## 🔧 Building the Project
+## Configuration (CLI)
+
+Run the built executable with optional flags. Defaults are **DXGI** + **GPU** access when no args are given.
+
+```bat
+WindowsScreenCapture.exe
+WindowsScreenCapture.exe --capture winrt --access cpu
+WindowsScreenCapture.exe -c dxgi -a gpu
+WindowsScreenCapture.exe --help
+```
+
+| Flag | Values | Default |
+| --- | --- | --- |
+| `-c`, `--capture` | `dxgi`, `winrt` | `dxgi` |
+| `-a`, `--access` | `gpu` (or `gpudirect`), `cpu` (or `cpuaccess`) | `gpu` |
+| `-h`, `--help` | | print usage |
+
+You can still call `CaptureApp::run(...)` from code with the same enums if you embed the library-style entry path.
+
+---
+
+## Building
 
 ### Requirements
 
-* Windows 10 (Version 1803 or later for WinRT).
-* Visual Studio 2019/2022 (with "Desktop development with C++").
-* CMake 3.8+.
+- Windows 10 (1803+ recommended for WinRT Graphics Capture)
+- Visual Studio 2022 with **Desktop development with C++**
+- CMake 3.8+
+- Vendored prebuilt **GLFW 3.4** under `glfw-3.4.bin.WIN64/` (MSVC `/MT` static lib; no separate GLFW install)
 
-### Build Instructions
+Windows SDK provides Direct3D 11 and WinRT headers; no legacy DirectX SDK is required.
 
-1. **Clone the repository.**
-2. **Open in Visual Studio** (File > Open > Folder).
-3. **Build:** CMake will automatically locate the Windows SDK (DirectX and WinRT headers).
-* *Note:* You do **not** need to install a separate DirectX SDK.
+### Build (Visual Studio)
 
+1. Clone the repository.
+2. **File → Open → Folder** on the repo root.
+3. Select a CMake preset (e.g. `x64-debug` from [`CMakePresets.json`](CMakePresets.json); output under `out/build/...`).
+4. Build and run target `WindowsScreenCapture`.
 
-4. **Run:** Select `WindowsDxgiScreenCapture.exe` as the startup target.
+### Build (CLI)
+
+```bat
+cmake -S . -B out/build/x64-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build out/build/x64-debug
+```
+
+#### Static vs dynamic MSVC runtime
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `USE_STATIC_RUNTIME=ON` | yes | `/MT` / `/MTd` + `glfw3_mt.lib` |
+| `USE_STATIC_RUNTIME=OFF` | | `/MD` / `/MDd` + `glfw3.lib` |
+
+```bat
+rem Dynamic CRT (requires matching VC++ redistributable on the target machine)
+cmake -S . -B out/build/x64-debug-md -G Ninja -DCMAKE_BUILD_TYPE=Debug -DUSE_STATIC_RUNTIME=OFF
+cmake --build out/build/x64-debug-md
+```
+
+Reconfigure (or use a fresh binary dir) after changing this option so the CRT flags and GLFW lib stay in sync.
+
+Root [`CMakeLists.txt`](CMakeLists.txt) pulls in GLFW with:
+
+```cmake
+add_subdirectory(glfw-3.4.bin.WIN64)
+target_link_libraries(WindowsScreenCapture PRIVATE ... glfw)
+```
 
 ---
 
-## 📂 File Structure
+## Notes on WinRT
 
-| Directory/File | Description |
-| --- | --- |
-| `dxgicapture/` | Low-level DXGI Desktop Duplication logic. |
-| `winrtcapture/` | Low-level Windows.Graphics.Capture logic (COM/WinRT Interop). |
-| `screencapturemethods/` | **Factory** interfaces (`IScreenCapture`) abstracting the engines. |
-| `frameaccessmethod/` | **Strategy** classes (`IFrameCaptureAccessStrategy`) for data handling. |
-| `util/` | Helpers: `ImageSaver` (WIC), `ThreadSafeQueue`. |
-| `main.cpp` | Entry point. Wires the Factory and Strategy together. |
+WinRT capture uses manual COM / WinRT interop (`RoInitialize`, `CreateDirect3D11DeviceFromDXGIDevice`, etc.) rather than C++/WinRT language projections, so the app stays a standard native C++ executable without a UWP packaging chain.
 
 ---
 
-## ⚠️ Notes on WinRT
+## License
 
-This project uses **C++/WinRT Interop** manually (via `RoInitialize` and `CreateDirect3D11DeviceFromDXGIDevice`) rather than C++/WinRT language projections (`.winmd` files). This ensures the project remains a standard, lightweight C++ console application without needing complex UWP/WinRT build chains.
+This project is licensed under the **MIT License**. See [`LICENSE.txt`](LICENSE.txt).
 
 ---
 
-## 📄 License
+## Third-party acknowledgements
 
-MIT License. Free for commercial and private use.
+### GLFW
+
+This project vendors and links **[GLFW](https://www.glfw.org/)** 3.4 (prebuilt binaries in [`glfw-3.4.bin.WIN64/`](glfw-3.4.bin.WIN64/)) for the default window/event host used by the preview UI.
+
+GLFW is Copyright (c) 2002-2006 Marcus Geelnard and Copyright (c) 2006-2019 Camilla Löwy. It is provided under the zlib/libpng license. The full license text is in [`glfw-3.4.bin.WIN64/LICENSE.md`](glfw-3.4.bin.WIN64/LICENSE.md).
+
+We gratefully acknowledge the GLFW authors and contributors. Use of GLFW here does not imply endorsement of this project by the GLFW project.
